@@ -26,6 +26,7 @@ type KafkaConsumer struct {
 	batchMu         sync.Mutex
 	flushTicker     *time.Ticker
 	flushTickerStop chan struct{}
+	lastFlushTime   time.Time
 }
 
 type pendingMessage struct {
@@ -65,6 +66,7 @@ func NewKafkaConsumerWithReader(reader MessageReader, repo transactions.Reposito
 }
 
 func (c *KafkaConsumer) Run(ctx context.Context) error {
+	c.lastFlushTime = time.Now()
 	// Start flush ticker
 	c.flushTicker = time.NewTicker(c.flushInterval)
 	go func() {
@@ -153,9 +155,13 @@ func (c *KafkaConsumer) flushBatch(ctx context.Context) {
 	batch := make([]pendingMessage, len(c.batch))
 	copy(batch, c.batch)
 	c.batch = c.batch[:0]
+	batchLen := len(batch)
+	now := time.Now()
+	elapsed := now.Sub(c.lastFlushTime).Microseconds()
+	c.lastFlushTime = now
 	c.batchMu.Unlock()
 
-	if len(batch) == 0 {
+	if batchLen == 0 {
 		return
 	}
 
@@ -186,6 +192,11 @@ func (c *KafkaConsumer) flushBatch(ctx context.Context) {
 	}
 
 	logger.Infof("consumer: successfully processed batch of %d messages", len(batch))
+	if elapsed < 1 {
+		elapsed = 1
+	}
+	rate := float64(batchLen) * 1000000 / float64(elapsed)
+	logger.Infof("consumer: %.2f transactions/sec since last flush", rate)
 }
 
 func (c *KafkaConsumer) Close() error {
