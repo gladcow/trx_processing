@@ -122,7 +122,7 @@ func (c *KafkaConsumer) addToBatch(msg kafka.Message) (int, error) {
 	// Decode and validate message
 	txnMsg, err := transactions.DecodeMessage(msg.Value)
 	if err != nil {
-		logger.Errorf("consumer: failed to decode message: %v", err)
+		logger.Warnf("consumer: failed to decode message (skipping): %v", err)
 		return 0, err
 	}
 
@@ -131,7 +131,7 @@ func (c *KafkaConsumer) addToBatch(msg kafka.Message) (int, error) {
 	txn := txnMsg.ToTransaction(messageID)
 
 	if err := txn.Validate(); err != nil {
-		logger.Errorf("consumer: invalid transaction: %v", err)
+		logger.Warnf("consumer: invalid transaction (skipping message): %v", err)
 		return 0, err
 	}
 

@@ -7,6 +7,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
+	"casino_trxes/internal/logger"
 	"casino_trxes/internal/transactions"
 )
 
@@ -31,19 +32,23 @@ func (s *Server) handleListTransactions(w http.ResponseWriter, r *http.Request) 
 		txType = "all"
 	}
 	if txType != "all" && txType != string(transactions.TransactionTypeBet) && txType != string(transactions.TransactionTypeWin) {
+		logger.Warnf("api: invalid transaction_type %q", txType)
 		writeError(w, http.StatusBadRequest, "transaction_type must be bet, win, or all")
 		return
 	}
 
+	logger.Infof("api: list transactions user_id=%q transaction_type=%s", userID, txType)
 	items, err := s.repo.List(r.Context(), transactions.Filter{
 		UserID:          userID,
 		TransactionType: txType,
 	})
 	if err != nil {
+		logger.Errorf("api: list transactions failed: %v", err)
 		writeError(w, http.StatusInternalServerError, "failed to fetch transactions")
 		return
 	}
 
+	logger.Infof("api: list transactions returned %d items", len(items))
 	writeJSON(w, http.StatusOK, items)
 }
 

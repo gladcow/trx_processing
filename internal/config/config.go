@@ -5,6 +5,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"casino_trxes/internal/logger"
 )
 
 type Config struct {
@@ -21,7 +23,7 @@ type Config struct {
 }
 
 func Load() Config {
-	return Config{
+	cfg := Config{
 		HTTPAddr:           getEnv("HTTP_ADDR", ":8080"),
 		KafkaBrokers:       splitCSV(getEnv("KAFKA_BROKERS", "localhost:9092")),
 		KafkaTopic:         getEnv("KAFKA_TOPIC", "casino.transactions"),
@@ -30,9 +32,11 @@ func Load() Config {
 		MigrationsPath:     getEnv("MIGRATIONS_PATH", "migrations"),
 		ReadTimeout:        getDurationEnv("HTTP_READ_TIMEOUT", 10*time.Second),
 		WriteTimeout:       getDurationEnv("HTTP_WRITE_TIMEOUT", 10*time.Second),
-		BatchSize:          getIntEnv("BATCH_SIZE", 100),
+		BatchSize:          getIntEnv("BATCH_SIZE", 1000),
 		BatchFlushInterval: getDurationEnv("BATCH_FLUSH_INTERVAL", 1*time.Second),
 	}
+	logger.Infof("config: loaded HTTP_ADDR=%s KAFKA_TOPIC=%s KAFKA_GROUP_ID=%s", cfg.HTTPAddr, cfg.KafkaTopic, cfg.KafkaGroupID)
+	return cfg
 }
 
 func getEnv(key, def string) string {

@@ -1,20 +1,41 @@
 package logger
 
 import (
-	"log"
-	"os"
+	"go.uber.org/zap"
 )
 
-var std = log.New(os.Stdout, "", log.LstdFlags|log.LUTC|log.Lshortfile)
+var Log = zap.NewNop()
+
+func Initialize() error {
+	var err error
+	Log, err = zap.NewDevelopment()
+	return err
+}
+
+func Info(msg string) {
+	Log.Sugar().Info(msg)
+}
 
 func Infof(format string, args ...any) {
-	std.Printf("INFO: "+format, args...)
+	Log.Sugar().Infof(format, args...)
+}
+
+func Warn(msg string) {
+	Log.Sugar().Warn(msg)
+}
+
+func Warnf(format string, args ...any) {
+	Log.Sugar().Warnf(format, args...)
+}
+
+func Error(msg string) {
+	Log.Sugar().Error(msg)
 }
 
 func Errorf(format string, args ...any) {
-	std.Printf("ERROR: "+format, args...)
+	Log.Sugar().Errorf(format, args...)
 }
 
 func Fatalf(format string, args ...any) {
-	std.Fatalf("FATAL: "+format, args...)
+	Log.Sugar().Fatalf(format, args...)
 }

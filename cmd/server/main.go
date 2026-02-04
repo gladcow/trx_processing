@@ -18,6 +18,9 @@ import (
 )
 
 func main() {
+	if err := logger.Initialize(); err != nil {
+		panic(err)
+	}
 	cfg := config.Load()
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)

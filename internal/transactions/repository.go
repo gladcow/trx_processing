@@ -8,6 +8,8 @@ import (
 
 	"github.com/jackc/pgconn"
 	"github.com/jackc/pgx/v4"
+
+	"casino_trxes/internal/logger"
 )
 
 // Pool abstracts Exec and Query for the repository (satisfied by *pgxpool.Pool and mocks).
@@ -42,9 +44,11 @@ func (r *PostgresRepository) BatchInsert(ctx context.Context, txns []Transaction
 	// Validate all transactions first
 	for i := range txns {
 		if err := txns[i].Validate(); err != nil {
+			logger.Warnf("transactions: invalid transaction at index %d: %v", i, err)
 			return fmt.Errorf("transaction at index %d: %w", i, err)
 		}
 	}
+	logger.Infof("transactions: batch insert %d records", len(txns))
 
 	// Build batch insert query
 	query := `INSERT INTO transactions (message_id, user_id, transaction_type, amount, timestamp)
@@ -63,6 +67,7 @@ func (r *PostgresRepository) BatchInsert(ctx context.Context, txns []Transaction
 
 	_, err := r.pool.Exec(ctx, query, args...)
 	if err != nil {
+		logger.Errorf("transactions: batch insert failed: %v", err)
 		return fmt.Errorf("batch insert: %w", err)
 	}
 
@@ -88,6 +93,7 @@ func (r *PostgresRepository) List(ctx context.Context, filter Filter) ([]Transac
 
 	rows, err := r.pool.Query(ctx, query, args...)
 	if err != nil {
+		logger.Errorf("transactions: list query failed: %v", err)
 		return nil, err
 	}
 	defer rows.Close()
