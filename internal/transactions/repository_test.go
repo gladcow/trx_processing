@@ -36,21 +36,21 @@ func TestPostgresRepositoryListFilters(t *testing.T) {
 
 	repo := NewPostgresRepository(pool)
 	now := time.Now().UTC()
-	if err := repo.Insert(ctx, &Transaction{
-		MessageID:       "msg-1",
-		UserID:          "user-1",
-		TransactionType: TransactionTypeBet,
-		Amount:          10,
-		Timestamp:       now.Add(-time.Minute),
-	}); err != nil {
-		t.Fatalf("insert: %v", err)
-	}
-	if err := repo.Insert(ctx, &Transaction{
-		MessageID:       "msg-2",
-		UserID:          "user-2",
-		TransactionType: TransactionTypeWin,
-		Amount:          25,
-		Timestamp:       now,
+	if err := repo.BatchInsert(ctx, []Transaction{
+		{
+			MessageID:       "msg-1",
+			UserID:          "user-1",
+			TransactionType: TransactionTypeBet,
+			Amount:          10,
+			Timestamp:       now.Add(-time.Minute),
+		},
+		{
+			MessageID:       "msg-2",
+			UserID:          "user-2",
+			TransactionType: TransactionTypeWin,
+			Amount:          25,
+			Timestamp:       now,
+		},
 	}); err != nil {
 		t.Fatalf("insert: %v", err)
 	}
@@ -143,33 +143,6 @@ func TestPostgresRepositoryIdempotency(t *testing.T) {
 
 	repo := NewPostgresRepository(pool)
 	now := time.Now().UTC()
-	txn := &Transaction{
-		MessageID:       "duplicate-msg-1",
-		UserID:          "user-1",
-		TransactionType: TransactionTypeBet,
-		Amount:          10,
-		Timestamp:       now,
-	}
-
-	// Insert first time
-	if err := repo.Insert(ctx, txn); err != nil {
-		t.Fatalf("first insert: %v", err)
-	}
-
-	// Try to insert again with same message_id (should be idempotent)
-	if err := repo.Insert(ctx, txn); err != nil {
-		t.Fatalf("second insert: %v", err)
-	}
-
-	// Should still have only one row
-	rows, err := repo.List(ctx, Filter{})
-	if err != nil {
-		t.Fatalf("list: %v", err)
-	}
-	if len(rows) != 1 {
-		t.Fatalf("expected 1 row (idempotent), got %d", len(rows))
-	}
-
 	// Test batch insert idempotency
 	txns := []Transaction{
 		{MessageID: "duplicate-msg-1", UserID: "user-1", TransactionType: TransactionTypeBet, Amount: 10, Timestamp: now},
@@ -179,9 +152,12 @@ func TestPostgresRepositoryIdempotency(t *testing.T) {
 	if err := repo.BatchInsert(ctx, txns); err != nil {
 		t.Fatalf("batch insert with duplicate: %v", err)
 	}
+	if err := repo.BatchInsert(ctx, txns); err != nil {
+		t.Fatalf("batch insert with duplicate: %v", err)
+	}
 
-	// Should have 2 rows total (1 original + 1 new from batch)
-	rows, err = repo.List(ctx, Filter{})
+	// Should have 2 rows total
+	rows, err := repo.List(ctx, Filter{})
 	if err != nil {
 		t.Fatalf("list: %v", err)
 	}

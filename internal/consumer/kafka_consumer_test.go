@@ -15,16 +15,24 @@ import (
 )
 
 type fakeReader struct {
-	messages      chan kafka.Message
-	err           error
-	committedMsgs []kafka.Message
-	mu            sync.Mutex
+	messages       chan kafka.Message
+	err            error
+	fetchErrCount  int // return err for first N FetchMessage calls
+	commitErr      error
+	committedMsgs  []kafka.Message
+	closeCalled    bool
+	mu             sync.Mutex
 }
 
 func (f *fakeReader) FetchMessage(ctx context.Context) (kafka.Message, error) {
-	if f.err != nil {
-		return kafka.Message{}, f.err
+	f.mu.Lock()
+	if f.err != nil && f.fetchErrCount > 0 {
+		f.fetchErrCount--
+		err := f.err
+		f.mu.Unlock()
+		return kafka.Message{}, err
 	}
+	f.mu.Unlock()
 	select {
 	case <-ctx.Done():
 		return kafka.Message{}, ctx.Err()
@@ -36,11 +44,25 @@ func (f *fakeReader) FetchMessage(ctx context.Context) (kafka.Message, error) {
 func (f *fakeReader) CommitMessages(ctx context.Context, msgs ...kafka.Message) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if f.commitErr != nil {
+		return f.commitErr
+	}
 	f.committedMsgs = append(f.committedMsgs, msgs...)
 	return nil
 }
 
-func (f *fakeReader) Close() error { return nil }
+func (f *fakeReader) Close() error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.closeCalled = true
+	return nil
+}
+
+func (f *fakeReader) closeCalledWithLock() bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.closeCalled
+}
 
 type fakeRepo struct {
 	mu           sync.Mutex
@@ -207,6 +229,239 @@ func TestKafkaConsumerBatchInsert(t *testing.T) {
 	if committedCount != 3 {
 		t.Fatalf("expected 3 committed messages, got %d", committedCount)
 	}
+}
+
+func TestKafkaConsumerInvalidTransactionValidation(t *testing.T) {
+	reader := &fakeReader{messages: make(chan kafka.Message, 1)}
+	repo := &fakeRepo{}
+	consumer := NewKafkaConsumerWithReader(reader, repo, 10, 100*time.Millisecond)
+
+	// Valid JSON but invalid transaction (zero amount)
+	payload := []byte(`{"user_id":"user-1","transaction_type":"bet","amount":0,"timestamp":"2025-02-04T12:00:00Z"}`)
+	reader.messages <- kafka.Message{Value: payload, Key: []byte("msg-1"), Offset: 1}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() {
+		done <- consumer.Run(ctx)
+	}()
+
+	time.Sleep(150 * time.Millisecond)
+	cancel()
+
+	if err := <-done; err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	repo.mu.Lock()
+	insertCount := len(repo.inserts)
+	repo.mu.Unlock()
+	if insertCount != 0 {
+		t.Fatalf("expected no inserts for invalid transaction, got %d", insertCount)
+	}
+
+	reader.mu.Lock()
+	committedCount := len(reader.committedMsgs)
+	reader.mu.Unlock()
+	if committedCount != 0 {
+		t.Fatalf("expected no committed messages, got %d", committedCount)
+	}
+}
+
+func TestKafkaConsumerFetchErrorRetry(t *testing.T) {
+	reader := &fakeReader{
+		messages:      make(chan kafka.Message, 1),
+		err:           errors.New("fetch temporarily failed"),
+		fetchErrCount: 1, // fail first call, then succeed
+	}
+	repo := &fakeRepo{}
+	consumer := NewKafkaConsumerWithReader(reader, repo, 10, 100*time.Millisecond)
+
+	msg := transactions.TransactionMessage{
+		UserID:          "user-1",
+		TransactionType: transactions.TransactionTypeBet,
+		Amount:          1,
+		Timestamp:       time.Now().UTC(),
+	}
+	payload, _ := json.Marshal(msg)
+	reader.messages <- kafka.Message{Value: payload, Key: []byte("msg-1"), Offset: 1}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() {
+		done <- consumer.Run(ctx)
+	}()
+
+	time.Sleep(200 * time.Millisecond)
+	cancel()
+
+	if err := <-done; err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	repo.mu.Lock()
+	insertCount := len(repo.inserts)
+	repo.mu.Unlock()
+	if insertCount != 1 {
+		t.Fatalf("expected 1 insert after retry, got %d", insertCount)
+	}
+}
+
+func TestKafkaConsumerContextCancel(t *testing.T) {
+	reader := &fakeReader{messages: make(chan kafka.Message)} // no messages sent
+	repo := &fakeRepo{}
+	consumer := NewKafkaConsumerWithReader(reader, repo, 10, 1*time.Second)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() {
+		done <- consumer.Run(ctx)
+	}()
+
+	cancel()
+
+	err := <-done
+	if err != nil {
+		t.Fatalf("expected nil error on context cancel, got %v", err)
+	}
+}
+
+func TestKafkaConsumerBatchInsertError(t *testing.T) {
+	reader := &fakeReader{messages: make(chan kafka.Message, 1)}
+	repo := &fakeRepo{err: errors.New("db unavailable")}
+	consumer := NewKafkaConsumerWithReader(reader, repo, 10, 50*time.Millisecond)
+
+	msg := transactions.TransactionMessage{
+		UserID:          "user-1",
+		TransactionType: transactions.TransactionTypeBet,
+		Amount:          1,
+		Timestamp:       time.Now().UTC(),
+	}
+	payload, _ := json.Marshal(msg)
+	reader.messages <- kafka.Message{Value: payload, Key: []byte("msg-1"), Offset: 1}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() {
+		done <- consumer.Run(ctx)
+	}()
+
+	time.Sleep(150 * time.Millisecond)
+	cancel()
+
+	if err := <-done; err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	reader.mu.Lock()
+	committedCount := len(reader.committedMsgs)
+	reader.mu.Unlock()
+	if committedCount != 0 {
+		t.Fatalf("expected no commits when BatchInsert fails, got %d", committedCount)
+	}
+}
+
+func TestKafkaConsumerCommitError(t *testing.T) {
+	reader := &fakeReader{
+		messages:  make(chan kafka.Message, 1),
+		commitErr: errors.New("commit failed"),
+	}
+	repo := &fakeRepo{}
+	consumer := NewKafkaConsumerWithReader(reader, repo, 10, 50*time.Millisecond)
+
+	msg := transactions.TransactionMessage{
+		UserID:          "user-1",
+		TransactionType: transactions.TransactionTypeBet,
+		Amount:          1,
+		Timestamp:       time.Now().UTC(),
+	}
+	payload, _ := json.Marshal(msg)
+	reader.messages <- kafka.Message{Value: payload, Key: []byte("msg-1"), Offset: 1}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() {
+		done <- consumer.Run(ctx)
+	}()
+
+	time.Sleep(150 * time.Millisecond)
+	cancel()
+
+	if err := <-done; err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	repo.mu.Lock()
+	insertCount := len(repo.inserts)
+	repo.mu.Unlock()
+	if insertCount != 1 {
+		t.Fatalf("expected batch insert to succeed (1 insert), got %d", insertCount)
+	}
+
+	reader.mu.Lock()
+	committedCount := len(reader.committedMsgs)
+	reader.mu.Unlock()
+	if committedCount != 0 {
+		t.Fatalf("expected no commits when CommitMessages fails, got %d", committedCount)
+	}
+}
+
+func TestKafkaConsumerClose(t *testing.T) {
+	reader := &fakeReader{messages: make(chan kafka.Message, 1)}
+	repo := &fakeRepo{}
+	consumer := NewKafkaConsumerWithReader(reader, repo, 10, 100*time.Millisecond)
+
+	// Start Run so that flushTicker is started
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() {
+		done <- consumer.Run(ctx)
+	}()
+
+	time.Sleep(20 * time.Millisecond)
+	err := consumer.Close()
+	cancel()
+	<-done
+
+	if err != nil {
+		t.Fatalf("Close() should return nil when reader.Close() succeeds: %v", err)
+	}
+	if !reader.closeCalledWithLock() {
+		t.Fatal("reader.Close() was not called")
+	}
+}
+
+func TestKafkaConsumerCloseWithoutRun(t *testing.T) {
+	reader := &fakeReader{messages: make(chan kafka.Message)}
+	repo := &fakeRepo{}
+	consumer := NewKafkaConsumerWithReader(reader, repo, 10, time.Second)
+
+	err := consumer.Close()
+	if err != nil {
+		t.Fatalf("Close() should return nil: %v", err)
+	}
+	if !reader.closeCalledWithLock() {
+		t.Fatal("reader.Close() was not called")
+	}
+}
+
+func TestNewKafkaConsumer(t *testing.T) {
+	repo := &fakeRepo{}
+	c := NewKafkaConsumer(
+		[]string{"localhost:9092"},
+		"test-topic",
+		"test-group",
+		repo,
+		10,
+		100*time.Millisecond,
+	)
+	if c == nil {
+		t.Fatal("NewKafkaConsumer returned nil")
+	}
+	if c.reader == nil {
+		t.Fatal("consumer reader is nil")
+	}
+	_ = c.Close() // avoid leak if reader holds resources
 }
 
 func TestKafkaConsumerBatchSizeFlush(t *testing.T) {

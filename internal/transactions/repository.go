@@ -10,7 +10,6 @@ import (
 )
 
 type Repository interface {
-	Insert(ctx context.Context, txn *Transaction) error
 	BatchInsert(ctx context.Context, txns []Transaction) error
 	List(ctx context.Context, filter Filter) ([]Transaction, error)
 }
@@ -28,27 +27,6 @@ func NewPostgresRepository(pool *pgxpool.Pool) *PostgresRepository {
 	return &PostgresRepository{pool: pool}
 }
 
-func (r *PostgresRepository) Insert(ctx context.Context, txn *Transaction) error {
-	if txn == nil {
-		return fmt.Errorf("transaction is nil")
-	}
-	if err := txn.Validate(); err != nil {
-		return err
-	}
-	_, err := r.pool.Exec(
-		ctx,
-		`INSERT INTO transactions (message_id, user_id, transaction_type, amount, timestamp)
-		 VALUES ($1, $2, $3, $4, $5)
-		 ON CONFLICT (message_id) DO NOTHING`,
-		txn.MessageID,
-		txn.UserID,
-		string(txn.TransactionType),
-		txn.Amount,
-		txn.Timestamp,
-	)
-	return err
-}
-
 func (r *PostgresRepository) BatchInsert(ctx context.Context, txns []Transaction) error {
 	if len(txns) == 0 {
 		return nil
@@ -60,13 +38,6 @@ func (r *PostgresRepository) BatchInsert(ctx context.Context, txns []Transaction
 			return fmt.Errorf("transaction at index %d: %w", i, err)
 		}
 	}
-
-	// Use a transaction to ensure atomicity
-	tx, err := r.pool.Begin(ctx)
-	if err != nil {
-		return fmt.Errorf("begin transaction: %w", err)
-	}
-	defer tx.Rollback(ctx)
 
 	// Build batch insert query
 	query := `INSERT INTO transactions (message_id, user_id, transaction_type, amount, timestamp)
@@ -83,13 +54,9 @@ func (r *PostgresRepository) BatchInsert(ctx context.Context, txns []Transaction
 	query += strings.Join(placeholders, ", ")
 	query += " ON CONFLICT (message_id) DO NOTHING"
 
-	_, err = tx.Exec(ctx, query, args...)
+	_, err := r.pool.Exec(ctx, query, args...)
 	if err != nil {
 		return fmt.Errorf("batch insert: %w", err)
-	}
-
-	if err := tx.Commit(ctx); err != nil {
-		return fmt.Errorf("commit transaction: %w", err)
 	}
 
 	return nil
