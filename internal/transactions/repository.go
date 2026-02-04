@@ -6,8 +6,15 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/jackc/pgconn"
+	"github.com/jackc/pgx/v4"
 )
+
+// Pool abstracts Exec and Query for the repository (satisfied by *pgxpool.Pool and mocks).
+type Pool interface {
+	Exec(ctx context.Context, sql string, args ...any) (pgconn.CommandTag, error)
+	Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error)
+}
 
 type Repository interface {
 	BatchInsert(ctx context.Context, txns []Transaction) error
@@ -20,10 +27,10 @@ type Filter struct {
 }
 
 type PostgresRepository struct {
-	pool *pgxpool.Pool
+	pool Pool
 }
 
-func NewPostgresRepository(pool *pgxpool.Pool) *PostgresRepository {
+func NewPostgresRepository(pool Pool) *PostgresRepository {
 	return &PostgresRepository{pool: pool}
 }
 
