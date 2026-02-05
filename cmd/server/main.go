@@ -45,7 +45,7 @@ func main() {
 		}
 	}()
 
-	apiServer := api.NewServer(repo)
+	apiServer := api.NewServer(repo, cfg.ListTransactionsMaxLimit)
 	httpServer := &http.Server{
 		Addr:         cfg.HTTPAddr,
 		Handler:      apiServer.Routes(),

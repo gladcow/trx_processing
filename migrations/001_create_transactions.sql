@@ -10,4 +10,5 @@ CREATE TABLE IF NOT EXISTS transactions (
 CREATE INDEX IF NOT EXISTS transactions_user_id_idx ON transactions (user_id);
 CREATE INDEX IF NOT EXISTS transactions_type_idx ON transactions (transaction_type);
 CREATE UNIQUE INDEX IF NOT EXISTS transactions_message_id_idx ON transactions (message_id) WHERE message_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS transactions_timestamp_id_idx ON transactions (timestamp DESC, id DESC);
 

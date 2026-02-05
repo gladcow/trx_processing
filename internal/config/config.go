@@ -18,8 +18,9 @@ type Config struct {
 	MigrationsPath     string
 	ReadTimeout        time.Duration
 	WriteTimeout       time.Duration
-	BatchSize          int
-	BatchFlushInterval time.Duration
+	BatchSize                 int
+	BatchFlushInterval        time.Duration
+	ListTransactionsMaxLimit  int
 }
 
 func Load() Config {
@@ -32,8 +33,9 @@ func Load() Config {
 		MigrationsPath:     getEnv("MIGRATIONS_PATH", "migrations"),
 		ReadTimeout:        getDurationEnv("HTTP_READ_TIMEOUT", 10*time.Second),
 		WriteTimeout:       getDurationEnv("HTTP_WRITE_TIMEOUT", 10*time.Second),
-		BatchSize:          getIntEnv("BATCH_SIZE", 1000),
-		BatchFlushInterval: getDurationEnv("BATCH_FLUSH_INTERVAL", 1*time.Second),
+		BatchSize:                 getIntEnv("BATCH_SIZE", 1000),
+		BatchFlushInterval:        getDurationEnv("BATCH_FLUSH_INTERVAL", 1*time.Second),
+		ListTransactionsMaxLimit:  getIntEnv("LIST_TRANSACTIONS_MAX_LIMIT", 100),
 	}
 	logger.Infof("config: loaded HTTP_ADDR=%s KAFKA_TOPIC=%s KAFKA_GROUP_ID=%s", cfg.HTTPAddr, cfg.KafkaTopic, cfg.KafkaGroupID)
 	return cfg

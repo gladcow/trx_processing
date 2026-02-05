@@ -157,14 +157,17 @@ func TestPostgresRepository_List_NoFilter(t *testing.T) {
 		AddRow(int64(1), sql.NullString{String: "msg-1", Valid: true}, "user-1", "bet", 10.5, ts).
 		ToPgxRows()
 
-	query := `SELECT id, message_id, user_id, transaction_type, amount, timestamp FROM transactions ORDER BY timestamp DESC`
+	query := `SELECT id, message_id, user_id, transaction_type, amount, timestamp FROM transactions ORDER BY timestamp DESC, id DESC LIMIT $1`
 	mockPool.EXPECT().
-		Query(gomock.Any(), query).
+		Query(gomock.Any(), query, 101).
 		Return(pgxRows, nil)
 
-	rows, err := repo.List(ctx, Filter{})
+	rows, nextCursor, err := repo.List(ctx, Filter{})
 	if err != nil {
 		t.Fatalf("List: %v", err)
+	}
+	if nextCursor != nil {
+		t.Fatalf("expected nil nextCursor, got %q", *nextCursor)
 	}
 	if len(rows) != 1 {
 		t.Fatalf("expected 1 row, got %d", len(rows))
@@ -189,14 +192,17 @@ func TestPostgresRepository_List_FilterByUserID(t *testing.T) {
 		AddRow(int64(1), sql.NullString{String: "msg-1", Valid: true}, "user-1", "bet", 10.0, ts).
 		ToPgxRows()
 
-	query := `SELECT id, message_id, user_id, transaction_type, amount, timestamp FROM transactions WHERE user_id = $1 ORDER BY timestamp DESC`
+	query := `SELECT id, message_id, user_id, transaction_type, amount, timestamp FROM transactions WHERE user_id = $1 ORDER BY timestamp DESC, id DESC LIMIT $2`
 	mockPool.EXPECT().
-		Query(gomock.Any(), query, "user-1").
+		Query(gomock.Any(), query, "user-1", 101).
 		Return(pgxRows, nil)
 
-	rows, err := repo.List(ctx, Filter{UserID: "user-1"})
+	rows, nextCursor, err := repo.List(ctx, Filter{UserID: "user-1"})
 	if err != nil {
 		t.Fatalf("List: %v", err)
+	}
+	if nextCursor != nil {
+		t.Fatalf("expected nil nextCursor")
 	}
 	if len(rows) != 1 || rows[0].UserID != "user-1" {
 		t.Errorf("unexpected rows: %+v", rows)
@@ -217,14 +223,17 @@ func TestPostgresRepository_List_FilterByTransactionType(t *testing.T) {
 		AddRow(int64(1), sql.NullString{String: "msg-1", Valid: true}, "user-1", "win", 25.0, ts).
 		ToPgxRows()
 
-	query := `SELECT id, message_id, user_id, transaction_type, amount, timestamp FROM transactions WHERE transaction_type = $1 ORDER BY timestamp DESC`
+	query := `SELECT id, message_id, user_id, transaction_type, amount, timestamp FROM transactions WHERE transaction_type = $1 ORDER BY timestamp DESC, id DESC LIMIT $2`
 	mockPool.EXPECT().
-		Query(gomock.Any(), query, "win").
+		Query(gomock.Any(), query, "win", 101).
 		Return(pgxRows, nil)
 
-	rows, err := repo.List(ctx, Filter{TransactionType: "win"})
+	rows, nextCursor, err := repo.List(ctx, Filter{TransactionType: "win"})
 	if err != nil {
 		t.Fatalf("List: %v", err)
+	}
+	if nextCursor != nil {
+		t.Fatalf("expected nil nextCursor")
 	}
 	if len(rows) != 1 || rows[0].TransactionType != TransactionTypeWin {
 		t.Errorf("unexpected rows: %+v", rows)
@@ -245,14 +254,17 @@ func TestPostgresRepository_List_BothFilters(t *testing.T) {
 		AddRow(int64(1), sql.NullString{String: "msg-1", Valid: true}, "user-1", "bet", 10.0, ts).
 		ToPgxRows()
 
-	query := `SELECT id, message_id, user_id, transaction_type, amount, timestamp FROM transactions WHERE user_id = $1 AND transaction_type = $2 ORDER BY timestamp DESC`
+	query := `SELECT id, message_id, user_id, transaction_type, amount, timestamp FROM transactions WHERE user_id = $1 AND transaction_type = $2 ORDER BY timestamp DESC, id DESC LIMIT $3`
 	mockPool.EXPECT().
-		Query(gomock.Any(), query, "user-1", "bet").
+		Query(gomock.Any(), query, "user-1", "bet", 101).
 		Return(pgxRows, nil)
 
-	rows, err := repo.List(ctx, Filter{UserID: "user-1", TransactionType: "bet"})
+	rows, nextCursor, err := repo.List(ctx, Filter{UserID: "user-1", TransactionType: "bet"})
 	if err != nil {
 		t.Fatalf("List: %v", err)
+	}
+	if nextCursor != nil {
+		t.Fatalf("expected nil nextCursor")
 	}
 	if len(rows) != 1 {
 		t.Errorf("expected 1 row, got %d", len(rows))
@@ -270,14 +282,17 @@ func TestPostgresRepository_List_EmptyResult(t *testing.T) {
 	columns := []string{"id", "message_id", "user_id", "transaction_type", "amount", "timestamp"}
 	pgxRows := pgxpoolmock.NewRows(columns).ToPgxRows()
 
-	query := `SELECT id, message_id, user_id, transaction_type, amount, timestamp FROM transactions ORDER BY timestamp DESC`
+	query := `SELECT id, message_id, user_id, transaction_type, amount, timestamp FROM transactions ORDER BY timestamp DESC, id DESC LIMIT $1`
 	mockPool.EXPECT().
-		Query(gomock.Any(), query).
+		Query(gomock.Any(), query, 101).
 		Return(pgxRows, nil)
 
-	rows, err := repo.List(ctx, Filter{})
+	rows, nextCursor, err := repo.List(ctx, Filter{})
 	if err != nil {
 		t.Fatalf("List: %v", err)
+	}
+	if nextCursor != nil {
+		t.Fatalf("expected nil nextCursor")
 	}
 	if len(rows) != 0 {
 		t.Errorf("expected 0 rows, got %d", len(rows))
@@ -293,12 +308,12 @@ func TestPostgresRepository_List_QueryError(t *testing.T) {
 	ctx := context.Background()
 	queryErr := errors.New("query failed")
 
-	query := `SELECT id, message_id, user_id, transaction_type, amount, timestamp FROM transactions ORDER BY timestamp DESC`
+	query := `SELECT id, message_id, user_id, transaction_type, amount, timestamp FROM transactions ORDER BY timestamp DESC, id DESC LIMIT $1`
 	mockPool.EXPECT().
-		Query(gomock.Any(), query).
+		Query(gomock.Any(), query, 101).
 		Return(nil, queryErr)
 
-	rows, err := repo.List(ctx, Filter{})
+	rows, nextCursor, err := repo.List(ctx, Filter{})
 	if err == nil {
 		t.Fatal("expected error")
 	}
@@ -307,6 +322,72 @@ func TestPostgresRepository_List_QueryError(t *testing.T) {
 	}
 	if rows != nil {
 		t.Errorf("expected nil rows on error, got %v", rows)
+	}
+	if nextCursor != nil {
+		t.Errorf("expected nil nextCursor on error")
+	}
+}
+
+func TestEncodeCursor_DecodeCursor_Roundtrip(t *testing.T) {
+	ts := time.Date(2025, 2, 5, 12, 0, 0, 123456789, time.UTC)
+	id := int64(42)
+	encoded := EncodeCursor(ts, id)
+	decodedTs, decodedID, err := DecodeCursor(encoded)
+	if err != nil {
+		t.Fatalf("DecodeCursor: %v", err)
+	}
+	if !decodedTs.Equal(ts) || decodedID != id {
+		t.Errorf("got (%v, %d), want (%v, %d)", decodedTs, decodedID, ts, id)
+	}
+}
+
+func TestDecodeCursor_Invalid(t *testing.T) {
+	tests := []string{"", "noid", "2025-02-05T12:00:00Z", "2025-02-05T12:00:00Z_", "2025-02-05T12:00:00Z_abc", "_123"}
+	for _, s := range tests {
+		_, _, err := DecodeCursor(s)
+		if err == nil {
+			t.Errorf("DecodeCursor(%q) expected error", s)
+		}
+	}
+}
+
+func TestPostgresRepository_List_WithCursorAndNextCursor(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	mockPool := pgxpoolmock.NewMockPgxPool(ctrl)
+	repo := NewPostgresRepository(mockPool)
+	ctx := context.Background()
+	cursorTs := time.Date(2025, 2, 4, 12, 0, 0, 0, time.UTC)
+	cursorID := int64(100)
+
+	columns := []string{"id", "message_id", "user_id", "transaction_type", "amount", "timestamp"}
+	ts1 := time.Date(2025, 2, 4, 11, 0, 0, 0, time.UTC)
+	ts2 := time.Date(2025, 2, 4, 10, 0, 0, 0, time.UTC)
+	pgxRows := pgxpoolmock.NewRows(columns).
+		AddRow(int64(99), sql.NullString{String: "msg-99", Valid: true}, "user-1", "bet", 10.0, ts1).
+		AddRow(int64(98), sql.NullString{String: "msg-98", Valid: true}, "user-1", "bet", 20.0, ts2).
+		AddRow(int64(97), sql.NullString{String: "msg-97", Valid: true}, "user-1", "bet", 30.0, ts2).
+		ToPgxRows()
+
+	query := `SELECT id, message_id, user_id, transaction_type, amount, timestamp FROM transactions WHERE user_id = $1 AND (timestamp, id) < ($2, $3) ORDER BY timestamp DESC, id DESC LIMIT $4`
+	mockPool.EXPECT().
+		Query(gomock.Any(), query, "user-1", cursorTs, cursorID, 3).
+		Return(pgxRows, nil)
+
+	rows, nextCursor, err := repo.List(ctx, Filter{UserID: "user-1", Limit: 2, CursorTimestamp: cursorTs, CursorID: cursorID})
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if nextCursor == nil {
+		t.Fatal("expected non-nil nextCursor (3 rows fetched, limit 2)")
+	}
+	expectedCursor := EncodeCursor(ts2, 98)
+	if *nextCursor != expectedCursor {
+		t.Errorf("next_cursor = %q, want %q", *nextCursor, expectedCursor)
+	}
+	if len(rows) != 2 {
+		t.Fatalf("expected 2 rows, got %d", len(rows))
 	}
 }
 
@@ -355,7 +436,7 @@ func TestPostgresRepositoryListFilters(t *testing.T) {
 		t.Fatalf("insert: %v", err)
 	}
 
-	rows, err := repo.List(ctx, Filter{UserID: "user-1", TransactionType: "all"})
+	rows, _, err := repo.List(ctx, Filter{UserID: "user-1", TransactionType: "all", Limit: 100})
 	if err != nil {
 		t.Fatalf("list: %v", err)
 	}
@@ -363,7 +444,7 @@ func TestPostgresRepositoryListFilters(t *testing.T) {
 		t.Fatalf("unexpected rows: %+v", rows)
 	}
 
-	rows, err = repo.List(ctx, Filter{TransactionType: "win"})
+	rows, _, err = repo.List(ctx, Filter{TransactionType: "win", Limit: 100})
 	if err != nil {
 		t.Fatalf("list: %v", err)
 	}
@@ -408,7 +489,7 @@ func TestPostgresRepositoryBatchInsert(t *testing.T) {
 		t.Fatalf("batch insert: %v", err)
 	}
 
-	rows, err := repo.List(ctx, Filter{})
+	rows, _, err := repo.List(ctx, Filter{Limit: 100})
 	if err != nil {
 		t.Fatalf("list: %v", err)
 	}
@@ -457,7 +538,7 @@ func TestPostgresRepositoryIdempotency(t *testing.T) {
 	}
 
 	// Should have 2 rows total
-	rows, err := repo.List(ctx, Filter{})
+	rows, _, err := repo.List(ctx, Filter{Limit: 100})
 	if err != nil {
 		t.Fatalf("list: %v", err)
 	}

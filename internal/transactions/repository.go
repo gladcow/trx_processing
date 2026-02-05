@@ -4,7 +4,9 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"strconv"
 	"strings"
+	"time"
 
 	"github.com/jackc/pgconn"
 	"github.com/jackc/pgx/v4"
@@ -20,12 +22,37 @@ type Pool interface {
 
 type Repository interface {
 	BatchInsert(ctx context.Context, txns []Transaction) error
-	List(ctx context.Context, filter Filter) ([]Transaction, error)
+	List(ctx context.Context, filter Filter) ([]Transaction, *string, error)
 }
 
 type Filter struct {
 	UserID          string
 	TransactionType string
+	Limit           int
+	CursorTimestamp time.Time
+	CursorID        int64
+}
+
+// EncodeCursor encodes (timestamp, id) for cursor-based pagination. Format: RFC3339Nano_id.
+func EncodeCursor(ts time.Time, id int64) string {
+	return ts.UTC().Format(time.RFC3339Nano) + "_" + strconv.FormatInt(id, 10)
+}
+
+// DecodeCursor decodes a cursor string into (timestamp, id). Returns zero time and 0 id on parse error.
+func DecodeCursor(s string) (time.Time, int64, error) {
+	idx := strings.LastIndex(s, "_")
+	if idx <= 0 {
+		return time.Time{}, 0, fmt.Errorf("invalid cursor format")
+	}
+	ts, err := time.Parse(time.RFC3339Nano, s[:idx])
+	if err != nil {
+		return time.Time{}, 0, err
+	}
+	id, err := strconv.ParseInt(s[idx+1:], 10, 64)
+	if err != nil {
+		return time.Time{}, 0, err
+	}
+	return ts, id, nil
 }
 
 type PostgresRepository struct {
@@ -74,10 +101,14 @@ func (r *PostgresRepository) BatchInsert(ctx context.Context, txns []Transaction
 	return nil
 }
 
-func (r *PostgresRepository) List(ctx context.Context, filter Filter) ([]Transaction, error) {
+func (r *PostgresRepository) List(ctx context.Context, filter Filter) ([]Transaction, *string, error) {
+	limit := filter.Limit
+	if limit <= 0 {
+		limit = 100
+	}
 	query := `SELECT id, message_id, user_id, transaction_type, amount, timestamp FROM transactions`
-	clauses := make([]string, 0, 2)
-	args := make([]any, 0, 2)
+	clauses := make([]string, 0, 4)
+	args := make([]any, 0, 6)
 	if strings.TrimSpace(filter.UserID) != "" {
 		args = append(args, filter.UserID)
 		clauses = append(clauses, fmt.Sprintf("user_id = $%d", len(args)))
@@ -86,15 +117,21 @@ func (r *PostgresRepository) List(ctx context.Context, filter Filter) ([]Transac
 		args = append(args, filter.TransactionType)
 		clauses = append(clauses, fmt.Sprintf("transaction_type = $%d", len(args)))
 	}
+	if !filter.CursorTimestamp.IsZero() {
+		args = append(args, filter.CursorTimestamp, filter.CursorID)
+		clauses = append(clauses, fmt.Sprintf("(timestamp, id) < ($%d, $%d)", len(args)-1, len(args)))
+	}
 	if len(clauses) > 0 {
 		query = query + " WHERE " + strings.Join(clauses, " AND ")
 	}
-	query += " ORDER BY timestamp DESC"
+	query += " ORDER BY timestamp DESC, id DESC"
+	args = append(args, limit+1)
+	query += fmt.Sprintf(" LIMIT $%d", len(args))
 
 	rows, err := r.pool.Query(ctx, query, args...)
 	if err != nil {
 		logger.Errorf("transactions: list query failed: %v", err)
-		return nil, err
+		return nil, nil, err
 	}
 	defer rows.Close()
 
@@ -104,7 +141,7 @@ func (r *PostgresRepository) List(ctx context.Context, filter Filter) ([]Transac
 		var ttype string
 		var messageID sql.NullString
 		if err := rows.Scan(&txn.ID, &messageID, &txn.UserID, &ttype, &txn.Amount, &txn.Timestamp); err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		if messageID.Valid {
 			txn.MessageID = messageID.String
@@ -113,9 +150,16 @@ func (r *PostgresRepository) List(ctx context.Context, filter Filter) ([]Transac
 		transactions = append(transactions, txn)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	return transactions, nil
+
+	var nextCursor *string
+	if len(transactions) > limit {
+		cursor := EncodeCursor(transactions[limit-1].Timestamp, transactions[limit-1].ID)
+		nextCursor = &cursor
+		transactions = transactions[:limit]
+	}
+	return transactions, nextCursor, nil
 }
 
 var _ Repository = (*PostgresRepository)(nil)

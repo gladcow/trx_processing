@@ -15,13 +15,13 @@ import (
 )
 
 type fakeReader struct {
-	messages       chan kafka.Message
-	err            error
-	fetchErrCount  int // return err for first N FetchMessage calls
-	commitErr      error
-	committedMsgs  []kafka.Message
-	closeCalled    bool
-	mu             sync.Mutex
+	messages      chan kafka.Message
+	err           error
+	fetchErrCount int // return err for first N FetchMessage calls
+	commitErr     error
+	committedMsgs []kafka.Message
+	closeCalled   bool
+	mu            sync.Mutex
 }
 
 func (f *fakeReader) FetchMessage(ctx context.Context) (kafka.Message, error) {
@@ -71,16 +71,6 @@ type fakeRepo struct {
 	err          error
 }
 
-func (f *fakeRepo) Insert(ctx context.Context, txn *transactions.Transaction) error {
-	if f.err != nil {
-		return f.err
-	}
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	f.inserts = append(f.inserts, *txn)
-	return nil
-}
-
 func (f *fakeRepo) BatchInsert(ctx context.Context, txns []transactions.Transaction) error {
 	if f.err != nil {
 		return f.err
@@ -92,8 +82,8 @@ func (f *fakeRepo) BatchInsert(ctx context.Context, txns []transactions.Transact
 	return nil
 }
 
-func (f *fakeRepo) List(ctx context.Context, filter transactions.Filter) ([]transactions.Transaction, error) {
-	return nil, errors.New("not implemented")
+func (f *fakeRepo) List(ctx context.Context, filter transactions.Filter) ([]transactions.Transaction, *string, error) {
+	return nil, nil, errors.New("not implemented")
 }
 
 func TestKafkaConsumerRun(t *testing.T) {
